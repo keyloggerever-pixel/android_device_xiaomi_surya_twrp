@@ -10,6 +10,7 @@ on:
         type: choice
         options:
         - twrp-12.1
+        - twrp-14
       DEVICE_TREE_URL:
         description: 'DEVICE_TREE_URL'
         required: true
@@ -74,14 +75,14 @@ jobs:
         java-version: '8'
 
     - name: Install Python 2
-      if: github.event.inputs.MANIFEST_BRANCH != 'twrp-11' && github.event.inputs.MANIFEST_BRANCH != 'twrp-12.1'
+      if: github.event.inputs.MANIFEST_BRANCH != 'twrp-11' && github.event.inputs.MANIFEST_BRANCH != 'twrp-12.1' && github.event.inputs.MANIFEST_BRANCH != 'twrp-14'
       run: |
         sudo apt -y install python2
         cd /usr/bin
         sudo ln -sf python2 python
 
     - name: Switch to Python3
-      if: github.event.inputs.MANIFEST_BRANCH == 'twrp-11' || github.event.inputs.MANIFEST_BRANCH == 'twrp-12.1'
+      if: github.event.inputs.MANIFEST_BRANCH == 'twrp-11' || github.event.inputs.MANIFEST_BRANCH == 'twrp-12.1' || github.event.inputs.MANIFEST_BRANCH == 'twrp-14'
       run: |
         sudo rm -rf /usr/bin/python
         sudo ln -s /usr/bin/python3 /usr/bin/python
@@ -91,7 +92,7 @@ jobs:
       uses: haya14busa/action-cond@v1
       id: manifest
       with:
-        cond: ${{ github.event.inputs.MANIFEST_BRANCH == 'twrp-11' || github.event.inputs.MANIFEST_BRANCH == 'twrp-12.1' }}
+        cond: ${{ github.event.inputs.MANIFEST_BRANCH == 'twrp-11' || github.event.inputs.MANIFEST_BRANCH == 'twrp-12.1' || github.event.inputs.MANIFEST_BRANCH == 'twrp-14' }}
         if_true: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git
         if_false: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni.git
 
@@ -122,6 +123,7 @@ jobs:
         source build/envsetup.sh
         repopick 7203
       working-directory: ${{ steps.pwd.outputs.wsdir }}
+      continue-on-error: true
 
     - name: Clone device tree
       run: |
@@ -143,7 +145,7 @@ jobs:
       uses: haya14busa/action-cond@v1
       id: buildtree
       with:
-        cond: ${{ github.event.inputs.MANIFEST_BRANCH == 'twrp-11' || github.event.inputs.MANIFEST_BRANCH == 'twrp-12.1' }}
+        cond: ${{ github.event.inputs.MANIFEST_BRANCH == 'twrp-11' || github.event.inputs.MANIFEST_BRANCH == 'twrp-12.1' || github.event.inputs.MANIFEST_BRANCH == 'twrp-14' }}
         if_true: twrp
         if_false: omni
 
@@ -301,6 +303,7 @@ jobs:
         echo "🎯 Build Target: ${{ github.event.inputs.BUILD_TARGET }}"
         echo "📅 Build Date: ${{ steps.var.outputs.date }}"
         echo "📦 Output: ${{ steps.zipfile.outputs.zippath }}"
+        echo "🔄 Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }}"
         echo ""
         echo "✅ Features Included:"
         echo "   • ADB Support"
