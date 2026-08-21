@@ -26,6 +26,8 @@ jobs:
 
       - name: Checkout device tree
         uses: actions/checkout@v4
+        with:
+          path: ~/aosp-repo/device-tree
 
       - name: Setup build environment
         run: |
@@ -39,7 +41,7 @@ jobs:
           repo init https://android.googlesource.com/platform/manifest
           repo sync -c
 
-          git clone https://github.com/omnirom/twrp.git -b ${{ matrix.branch }} device/xiaomi/surya
+          cd ~/aosp-repo/device-tree && git clone . ~/aosp-recovery/device/xiaomi/surya
           git clone https://github.com/omnirom/twrp.git -b ${{ matrix.branch }} vendor/omni
           git clone https://github.com/omnirom/twrp.git -b ${{ matrix.branch }} bootable/recovery
 
