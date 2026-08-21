@@ -33,7 +33,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y git-core gnupg flex bison gperf build-essential \
-            zip unzip zlib1g-dev mczip3 lib32z1-dev lib32ncurses5-dev x11proto-core-dev \
+            zip unzip liblzma-dev lib32z1-dev lib32ncurses5-dev x11proto-core-dev \
             libx11-dev libxml2-utils libxml2 libxml2-dev m4 curl libsdl1.2-dev \
             libc6-dev libncurses5-dev xsltproc repo
 
