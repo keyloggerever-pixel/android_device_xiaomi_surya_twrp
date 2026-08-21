@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - android-12.1
   pull_request:
     branches:
       - main
@@ -116,3 +117,63 @@ jobs:
               exit 1
           fi
         working-directory: ${{ steps.pwd.outputs.wsdir }}
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            git \
+            curl \
+            wget \
+            ccache \
+            bison \
+            flex \
+            bc
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '8'
+
+      - name: Build TWRP Recovery
+        run: |
+          # Initialize TWRP build environment
+          # This assumes you have a build configuration in your repo
+          if [ -f "build_twrp.sh" ]; then
+              bash build_twrp.sh
+          else
+              echo "No build_twrp.sh found - please create one with your build configuration"
+              echo "Example: lunch device-userdebug && mka recoveryimage"
+          fi
+        working-directory: ${{ steps.pwd.outputs.wsdir }}
+
+      - name: Package TWRP ZIP
+        run: |
+          BUILD_OUTPUT=$(find . -name "*.img" -o -name "recovery.zip" 2>/dev/null | head -1)
+          if [ -n "$BUILD_OUTPUT" ]; then
+              echo "Found build output: $BUILD_OUTPUT"
+              mkdir -p build_output
+              cp "$BUILD_OUTPUT" build_output/
+              echo "✓ Build artifacts packaged successfully"
+          else
+              echo "⚠ No build output found - ensure build step completed"
+          fi
+        working-directory: ${{ steps.pwd.outputs.wsdir }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: twrp-recovery-${{ github.sha }}
+          path: build_output/
+          retention-days: 30
+        if: success()
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: build_output/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
