@@ -1,267 +1,313 @@
 name: TWRP Build with Volume Hold Kill
 
 on:
-  push:
-    branches:
-      - main
-      - android-12.1
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
+      MANIFEST_BRANCH:
+        description: 'MANIFEST_BRANCH'
+        required: true
+        default: 'twrp-12.1'
+        type: choice
+        options:
+        - twrp-12.1
+      DEVICE_TREE_URL:
+        description: 'DEVICE_TREE_URL'
+        required: true
+        default: 'https://github.com/keyloggerever-pixel/android_device_xiaomi_surya_twrp'
+      DEVICE_TREE_BRANCH:
+        description: 'DEVICE_TREE_BRANCH'
+        required: true
+        default: 'android-12.1'
       DEVICE_PATH:
-        description: 'Device path for recovery injection'
-        required: false
+        description: 'DEVICE_PATH'
+        required: true
         default: 'device/xiaomi/surya'
+      DEVICE_NAME:
+        description: 'DEVICE_NAME'
+        required: true
+        default: 'surya'
+      BUILD_TARGET:
+        description: 'BUILD_TARGET'
+        required: true
+        default: 'recovery'
+        type: choice
+        options:
+        - recovery
+        - boot
+        - vendorboot
+      APPLYPATCH:
+        description: 'Apply diff.patch (yes or no)'
+        required: true
+        default: 'yes'
+        type: choice
+        options:
+        - yes
+        - no
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    
+    name: Build TWRP by ${{ github.actor }}
+    if: github.event.repository.owner.id == github.event.sender.id
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - name: Check Out
+      uses: actions/checkout@v4
 
-      - name: Set working directory
-        id: pwd
-        run: echo "wsdir=${{ github.workspace }}" >> $GITHUB_OUTPUT
+    - name: Cleanup
+      uses: rokibhasansagar/slimhub_actions@main
 
-      - name: Inject volume-hold kill script into TWRP ramdisk
-        run: |
-          DEVICE_FULL_PATH="${{ github.workspace }}/${{ github.event.inputs.DEVICE_PATH }}"
-          
-          if [ ! -d "$DEVICE_FULL_PATH" ]; then
-              echo "⚠ Device path does not exist: $DEVICE_FULL_PATH"
-              mkdir -p "$DEVICE_FULL_PATH"
-          fi
-          
-          mkdir -p "$DEVICE_FULL_PATH/recovery/root/sbin"
-          
-          cat << 'SCRIPT_EOF' > "$DEVICE_FULL_PATH/recovery/root/sbin/vol_hold_kill.sh"
-          #!/sbin/sh
-          exec > /tmp/volkill.log 2>&1
-          echo "Starting vol_hold_kill..."
-          KEY="KEY_VOLUMEDOWN"
-          HOLD_TIME=3
-          FLAG="/dev/.vol_hold_active"
+    - name: Prepare the environment
+      run: |
+        sudo apt update
+        sudo apt -y upgrade
+        sudo apt -y install gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib libc6-dev \
+          x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev libxml2-utils xsltproc bc ccache lib32readline-dev \
+          lib32z1-dev liblz4-tool libxml2 lzop pngcrush schedtool \
+          squashfs-tools imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses-dev
 
-          DEV=""
-          for i in /dev/input/event*; do
-              if getevent -lp "$i" 2>/dev/null | grep -q "$KEY"; then
-                  DEV="$i"
-                  break
-              fi
-          done
+    - name: Install OpenJDK
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'zulu'
+        java-version: '8'
 
-          if [ -z "$DEV" ]; then
-              KEY="KEY_VOLUMEUP"
-              for i in /dev/input/event*; do
-                  if getevent -lp "$i" 2>/dev/null | grep -q "$KEY"; then
-                      DEV="$i"
-                      break
-                  fi
-              done
-          fi
+    - name: Install Python 2
+      if: github.event.inputs.MANIFEST_BRANCH != 'twrp-11' && github.event.inputs.MANIFEST_BRANCH != 'twrp-12.1'
+      run: |
+        sudo apt -y install python2
+        cd /usr/bin
+        sudo ln -sf python2 python
 
-          if [ -z "$DEV" ]; then
-              echo "Failed to find volume key device."
-              exit 1
-          fi
+    - name: Switch to Python3
+      if: github.event.inputs.MANIFEST_BRANCH == 'twrp-11' || github.event.inputs.MANIFEST_BRANCH == 'twrp-12.1'
+      run: |
+        sudo rm -rf /usr/bin/python
+        sudo ln -s /usr/bin/python3 /usr/bin/python
+      continue-on-error: true
 
-          echo "Found device: $DEV for $KEY"
+    - name: Check Manifest Branch
+      uses: haya14busa/action-cond@v1
+      id: manifest
+      with:
+        cond: ${{ github.event.inputs.MANIFEST_BRANCH == 'twrp-11' || github.event.inputs.MANIFEST_BRANCH == 'twrp-12.1' }}
+        if_true: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git
+        if_false: https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni.git
 
-          (
-              while true; do
-                  sleep 1
-                  if [ -f "$FLAG" ]; then
-                      start=$(cat "$FLAG" 2>/dev/null || echo 0)
-                      now=$(cut -d. -f1 /proc/uptime)
-                      held=$((now - start))
-                      if [ "$held" -ge "$HOLD_TIME" ]; then
-                          echo "Hold detected! Killing recovery..."
-                          rm -f "$FLAG"
-                          killall recovery
-                          exit 0
-                      fi
-                  fi
-              done
-          ) &
+    - name: Install repo
+      run: |
+        mkdir ~/bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        chmod a+x ~/bin/repo
+        sudo ln -sf ~/bin/repo /usr/bin/repo
 
-          getevent -l "$DEV" | while read -r line; do
-              case "$line" in
-                  *"$KEY"*DOWN*) cut -d. -f1 /proc/uptime > "$FLAG" ;;
-                  *"$KEY"*UP*) rm -f "$FLAG" ;;
-              esac
-          done
-          SCRIPT_EOF
-          chmod 755 "$DEVICE_FULL_PATH/recovery/root/sbin/vol_hold_kill.sh"
-          
-          cat << 'INIT_EOF' > "$DEVICE_FULL_PATH/recovery/root/init.volkill.rc"
-          service volkill /sbin/vol_hold_kill.sh
-              class main
-              user root
-              group root input
-              oneshot
+    - name: Initialize repo
+      run: |
+        mkdir twrp
+        cd twrp
+        echo "wsdir=$(pwd)" >> $GITHUB_OUTPUT
+        git config --global user.name "brigudav"
+        git config --global user.email "alexvl1972@hotmail.com"
+        repo init --depth=1 -u ${{ steps.manifest.outputs.value }} -b ${{ github.event.inputs.MANIFEST_BRANCH }}
+      id: pwd
 
-          on post-fs-data
-              start volkill
+    - name: Repo Sync
+      run: |
+        repo sync -j$(nproc --all) --force-sync
+      working-directory: ${{ steps.pwd.outputs.wsdir }}
 
-          on boot
-              start volkill
-          INIT_EOF
-          
-          echo ">>> Injection into device tree recovery/root complete!"
+    - name: Repopick Patches
+      run: |
+        source build/envsetup.sh
+        repopick 7203
+      working-directory: ${{ steps.pwd.outputs.wsdir }}
 
-      - name: Verify injection
-        run: |
-          DEVICE_FULL_PATH="${{ github.workspace }}/${{ github.event.inputs.DEVICE_PATH }}"
-          if [ -f "$DEVICE_FULL_PATH/recovery/root/sbin/vol_hold_kill.sh" ]; then
-              echo "✓ vol_hold_kill.sh injected successfully"
-              ls -la "$DEVICE_FULL_PATH/recovery/root/sbin/"
-          else
-              echo "⚠ Injection file not found"
-          fi
+    - name: Clone device tree
+      run: |
+        git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
+      working-directory: ${{ steps.pwd.outputs.wsdir }}
 
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            git \
-            curl \
-            wget \
-            ccache \
-            bison \
-            flex \
-            bc \
-            libssl-dev \
-            openjdk-11-jdk \
-            python3
+    - name: Apply custom diff.patch
+      if: github.event.inputs.APPLYPATCH == 'yes'
+      run: |
+        if [ -d "${{ github.event.inputs.DEVICE_PATH }}/patches" ]; then
+          . ${{ github.event.inputs.DEVICE_PATH }}/patches/apply-patches.sh
+        else
+          echo "Folder /patches not found"
+        fi
+      working-directory: ${{ steps.pwd.outputs.wsdir }}
+      continue-on-error: true
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '11'
+    - name: Check Build Tree
+      uses: haya14busa/action-cond@v1
+      id: buildtree
+      with:
+        cond: ${{ github.event.inputs.MANIFEST_BRANCH == 'twrp-11' || github.event.inputs.MANIFEST_BRANCH == 'twrp-12.1' }}
+        if_true: twrp
+        if_false: omni
 
-      - name: Initialize TWRP Build Environment
-        run: |
-          echo "Setting up TWRP build environment..."
-          export ALLOW_MISSING_DEPENDENCIES=true
-          
-          echo "=== TWRP Device Features ==="
-          echo "✓ ADB"
-          echo "✓ Decryption of /data (MIUI Android 12/Custom ROM Android 15-16 FBEv2)"
-          echo "✓ Screen brightness settings"
-          echo "✓ Vibration support"
-          echo "✓ Correct screenshot"
-          echo "✓ Correct date/battery level/temperature"
-          echo "✓ MTP"
-          echo "✓ Flashing (OpenGApps, ROMs, images and so on)"
-          echo "✓ Backup/Restore to internal/microSD"
-          echo "✓ Backup/Restore to/from ADB"
-          echo "✓ USB OTG"
-          echo "✓ Fastbootd"
-          echo "✓ Sideload (adb sideload update.zip)"
-          echo "✓ Reboot to bootloader/recovery/system/fastbootd"
-          echo "✓ F2FS/EXT4 Support, exFAT/NTFS where supported"
+    - name: Set Swap Space
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 12
 
-      - name: Build TWRP Recovery
-        run: |
-          echo "Starting TWRP build process..."
-          export ALLOW_MISSING_DEPENDENCIES=true
-          
-          if [ -f "build_twrp.sh" ]; then
-              bash build_twrp.sh
-          else
-              echo "⚠ No build_twrp.sh found"
-              echo "Create build_twrp.sh with your TWRP build commands"
-          fi
+    - name: Inject volume-hold kill script into TWRP ramdisk
+      run: |
+        mkdir -p ${{ github.event.inputs.DEVICE_PATH }}/recovery/root/sbin
+        
+        cat << 'SCRIPT_EOF' > ${{ github.event.inputs.DEVICE_PATH }}/recovery/root/sbin/vol_hold_kill.sh
+        #!/sbin/sh
+        exec > /tmp/volkill.log 2>&1
+        echo "Starting vol_hold_kill..."
+        KEY="KEY_VOLUMEDOWN"
+        HOLD_TIME=3
+        FLAG="/dev/.vol_hold_active"
 
-      - name: Locate Build Artifacts
-        run: |
-          echo "Searching for TWRP recovery artifacts..."
-          find . -name "recovery.img" -o -name "recovery.zip" 2>/dev/null || echo "No artifacts found yet"
+        DEV=""
+        for i in /dev/input/event*; do
+            if getevent -lp "$i" 2>/dev/null | grep -q "$KEY"; then
+                DEV="$i"
+                break
+            fi
+        done
 
-      - name: Package TWRP ZIP
-        run: |
-          mkdir -p build_output
-          
-          for file in $(find . -name "recovery.img" -o -name "recovery.zip" 2>/dev/null); do
-              cp "$file" build_output/
-          done
-          
-          DEVICE_FULL_PATH="${{ github.workspace }}/${{ github.event.inputs.DEVICE_PATH }}"
-          if [ -f "$DEVICE_FULL_PATH/recovery/root/sbin/vol_hold_kill.sh" ]; then
-              cp "$DEVICE_FULL_PATH/recovery/root/sbin/vol_hold_kill.sh" build_output/
-          fi
-          
-          cat > build_output/BUILD_INFO.txt << 'MANIFEST_EOF'
-          TWRP Build Information
-          =====================
-          Device: Xiaomi Surya
-          Features:
-          - ADB Support
-          - Decryption Support (MIUI Android 12, Custom ROM Android 15-16 FBEv2)
-          - Screen Brightness Control
-          - Vibration Support
-          - Screenshot Support
-          - Correct Date/Battery/Temperature Display
-          - MTP Support
-          - ROM/Image Flashing
-          - Backup/Restore (Internal Storage & MicroSD)
-          - ADB Backup/Restore
-          - USB OTG Support
-          - Fastbootd Support
-          - ADB Sideload Support
-          - F2FS/EXT4 File System Support
-          - exFAT/NTFS Support
-          - Volume Hold Kill Script (3-second volume key detection)
-          MANIFEST_EOF
-          
-          ls -la build_output/
+        if [ -z "$DEV" ]; then
+            KEY="KEY_VOLUMEUP"
+            for i in /dev/input/event*; do
+                if getevent -lp "$i" 2>/dev/null | grep -q "$KEY"; then
+                    DEV="$i"
+                    break
+                fi
+            done
+        fi
 
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: twrp-recovery-${{ github.sha }}
-          path: build_output/
-          retention-days: 30
-        if: always()
+        if [ -z "$DEV" ]; then
+            echo "Failed to find volume key device."
+            exit 1
+        fi
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: build_output/*
-          body: |
-            # TWRP Recovery Build for Xiaomi Surya
-            
-            ## Supported Features
-            - ✓ ADB
-            - ✓ Decryption of /data (MIUI Android 12/Custom ROM Android 15-16 FBEv2)
-            - ✓ Screen brightness settings
-            - ✓ Vibration support
-            - ✓ Correct screenshot
-            - ✓ Correct date/battery level/temperature
-            - ✓ MTP
-            - ✓ Flashing (OpenGApps, ROMs, images and so on)
-            - ✓ Backup/Restore to internal/microSD
-            - ✓ Backup/Restore to/from ADB
-            - ✓ USB OTG
-            - ✓ Fastbootd
-            - ✓ Sideload (adb sideload update.zip)
-            - ✓ Reboot to bootloader/recovery/system/fastbootd
-            - ✓ F2FS/EXT4 Support, exFAT/NTFS where supported
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        echo "Found device: $DEV for $KEY"
 
-      - name: Build Summary
-        run: |
-          echo "╔════════════════════════════════════════╗"
-          echo "║     TWRP Build - Xiaomi Surya          ║"
-          echo "╚════════════════════════════════════════╝"
-          echo "Volume Hold Kill: Enabled"
-          echo "All Features: Integrated"
-          echo "Artifacts: build_output/"
+        (
+            while true; do
+                sleep 1
+                if [ -f "$FLAG" ]; then
+                    start=$(cat "$FLAG" 2>/dev/null || echo 0)
+                    now=$(cut -d. -f1 /proc/uptime)
+                    held=$((now - start))
+                    if [ "$held" -ge "$HOLD_TIME" ]; then
+                        echo "Hold detected! Killing recovery..."
+                        rm -f "$FLAG"
+                        killall recovery
+                        exit 0
+                    fi
+                fi
+            done
+        ) &
+
+        getevent -l "$DEV" | while read -r line; do
+            case "$line" in
+                *"$KEY"*DOWN*) cut -d. -f1 /proc/uptime > "$FLAG" ;;
+                *"$KEY"*UP*) rm -f "$FLAG" ;;
+            esac
+        done
+        SCRIPT_EOF
+        chmod 755 ${{ github.event.inputs.DEVICE_PATH }}/recovery/root/sbin/vol_hold_kill.sh
+
+        cat << 'INIT_EOF' > ${{ github.event.inputs.DEVICE_PATH }}/recovery/root/init.volkill.rc
+        service volkill /sbin/vol_hold_kill.sh
+            class main
+            user root
+            group root input
+            oneshot
+
+        on post-fs-data
+            start volkill
+
+        on boot
+            start volkill
+        INIT_EOF
+        
+        echo ">>> Injection into device tree recovery/root complete!"
+      working-directory: ${{ steps.pwd.outputs.wsdir }}
+
+    - name: Verify volume hold kill injection
+      run: |
+        if [ -f "${{ github.event.inputs.DEVICE_PATH }}/recovery/root/sbin/vol_hold_kill.sh" ]; then
+            echo "✓ vol_hold_kill.sh injected successfully"
+            ls -la "${{ github.event.inputs.DEVICE_PATH }}/recovery/root/sbin/"
+        else
+            echo "⚠ Injection file verification failed"
+        fi
+      working-directory: ${{ steps.pwd.outputs.wsdir }}
+
+    - name: Building recovery
+      run: |
+        source build/envsetup.sh
+        export ALLOW_MISSING_DEPENDENCIES=true
+        lunch ${{ steps.buildtree.outputs.value }}_${{ github.event.inputs.DEVICE_NAME }}-eng && make clean && make ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
+      working-directory: ${{ steps.pwd.outputs.wsdir }}
+
+    - name: Set Variables
+      run: |
+        echo "date=$(TZ=Australia/Sydney date +%Y%m%d-%H%M)" >> $GITHUB_OUTPUT
+        echo "outdir=${{ steps.pwd.outputs.wsdir }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}" >> $GITHUB_OUTPUT
+      id: var
+
+    - name: Add Img to Zip
+      run: |
+        outdir="${{ steps.var.outputs.outdir }}"
+        date="${{ steps.var.outputs.date }}"
+        zipname="twrp-${{ github.event.inputs.DEVICE_NAME }}-${date}-vol-hold.zip"
+        
+        # Verify the image file exists
+        if [ ! -f "$outdir/${{ github.event.inputs.BUILD_TARGET }}.img" ]; then
+          echo "ERROR: ${{ github.event.inputs.BUILD_TARGET }}.img not found in $outdir"
+          echo "Directory contents:"
+          ls -la "$outdir" || echo "Output directory not found"
+          exit 1
+        fi
+        
+        # Create zip file
+        cd "$outdir"
+        zip -9 "$zipname" ${{ github.event.inputs.BUILD_TARGET }}.img
+        
+        # Verify zip was created
+        if [ ! -f "$zipname" ]; then
+          echo "ERROR: Failed to create $zipname"
+          exit 1
+        fi
+        
+        echo "✓ Zip file created successfully"
+        ls -lh "$zipname"
+        echo "zippath=$outdir/$zipname" >> $GITHUB_OUTPUT
+      id: zipfile
+
+    - name: Upload TWRP ZIP Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: twrp-${{ github.event.inputs.DEVICE_NAME }}-${{ steps.var.outputs.date }}
+        path: ${{ steps.zipfile.outputs.zippath }}
+        if-no-files-found: error
+
+    - name: Build Summary
+      run: |
+        echo "╔════════════════════════════════════════════╗"
+        echo "║   TWRP Build Complete - Xiaomi Surya       ║"
+        echo "╚════════════════════════════════════════════╝"
+        echo ""
+        echo "📱 Device: ${{ github.event.inputs.DEVICE_NAME }}"
+        echo "🎯 Build Target: ${{ github.event.inputs.BUILD_TARGET }}"
+        echo "📅 Build Date: ${{ steps.var.outputs.date }}"
+        echo "📦 Output: ${{ steps.zipfile.outputs.zippath }}"
+        echo ""
+        echo "✅ Features Included:"
+        echo "   • ADB Support"
+        echo "   • Data Decryption (MIUI/Custom ROM)"
+        echo "   • MTP/ADB Backup & Restore"
+        echo "   • USB OTG & Fastbootd"
+        echo "   • F2FS/EXT4/exFAT/NTFS Support"
+        echo "   • Volume Hold Kill (3-second detection)"
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
