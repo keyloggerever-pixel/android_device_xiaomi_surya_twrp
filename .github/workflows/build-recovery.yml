@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-22.04
     strategy:
       matrix:
-        branch: [twrp-11.0, twrp-12.0, twrp-13.0]
+        branch: [twrp-11.0, twrp-12.0, twrp-13.0, twrp-14.0]
 
     steps:
       - name: Set up JDK 17
