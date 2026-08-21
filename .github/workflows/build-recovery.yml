@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-22.04
     strategy:
       matrix:
-        branch: [twrp-11.0, twrp-12.0, twrp-13.0, twrp-14.0]
+        branch: [twrp-14]
 
     steps:
       - name: Set up JDK 17
@@ -38,17 +38,16 @@ jobs:
             libc6-dev libncurses5-dev xsltproc repo
 
           mkdir -p ~/aosp-recovery && cd ~/aosp-recovery
-          repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-14
-          repo sync -c
+          repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b ${{ matrix.branch }}
+          repo sync
 
           cd ~/aosp-repo/device-tree && git clone . ~/aosp-recovery/device/xiaomi/surya
-          git clone https://git.code.sf.net/p/twrp/source -b ${{ matrix.branch }} ~/aosp-recovery/vendor/omni
-          git clone https://git.code.sf.net/p/twrp/source -b ${{ matrix.branch }} ~/aosp-recovery/bootable/recovery
 
+          export ALLOW_MISSING_DEPENDENCIES=true
           cd ~/aosp-recovery
           . build/envsetup.sh
-          lunch omni_surya-eng
-          make -j$(nproc --all) recoveryimage
+          lunch twrp_surya-eng
+          mka recoveryimage
 
       - name: Upload recovery image
         uses: actions/upload-artifact@v4
