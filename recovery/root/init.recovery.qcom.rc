@@ -35,6 +35,12 @@ service vibrator-service /vendor/bin/vendor.qti.hardware.vibrator@1.2-service
 on boot
     start vibrator-service
     start health-hal-2-1
+    start killall-recovery
+    exec -z root shell -- /scripts/volkey_kill.sh
+
+service killall-recovery /system/bin/killall recovery
+    class main
+    oneshot
 
 on property:crypto.ready=0
     stop vendor.qseecomd

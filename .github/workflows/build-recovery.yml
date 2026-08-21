@@ -1,0 +1,56 @@
+name: build-recovery
+
+on:
+  push:
+    paths-ignore:
+      - '**.md'
+      - '**.txt'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - '**.txt'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        branch: [twrp-11.0, twrp-12.0, twrp-13.0]
+
+    steps:
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Checkout device tree
+        uses: actions/checkout@v4
+
+      - name: Setup build environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git-core gnupg flex bison gperf build-essential \
+            zip unzip zlib1g-dev mczip3 lib32z1-dev lib32ncurses5-dev x11proto-core-dev \
+            libx11-dev libxml2-utils libxml2 libxml2-dev m4 curl libsdl1.2-dev \
+            libc6-dev libncurses5-dev xsltproc repo
+
+          mkdir -p ~/aosp-recovery && cd ~/aosp-recovery
+          repo init https://android.googlesource.com/platform/manifest
+          repo sync -c
+
+          git clone https://github.com/omnirom/twrp.git -b ${{ matrix.branch }} device/xiaomi/surya
+          git clone https://github.com/omnirom/twrp.git -b ${{ matrix.branch }} vendor/omni
+          git clone https://github.com/omnirom/twrp.git -b ${{ matrix.branch }} bootable/recovery
+
+          cd ~/aosp-recovery
+          . build/envsetup.sh
+          lunch omni_surya-eng
+          make -j$(nproc --all) recoveryimage
+
+      - name: Upload recovery image
+        uses: actions/upload-artifact@v4
+        with:
+          name: recovery-${{ matrix.branch }}
+          path: ~/aosp-recovery/out/target/product/surya/recovery.img
+          retention-days: 7
