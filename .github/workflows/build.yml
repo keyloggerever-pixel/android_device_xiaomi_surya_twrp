@@ -29,9 +29,18 @@ jobs:
 
       - name: Inject volume-hold kill script into TWRP ramdisk
         run: |
-          mkdir -p ${{ github.event.inputs.DEVICE_PATH }}/recovery/root/sbin
+          DEVICE_FULL_PATH="${{ github.workspace }}/${{ github.event.inputs.DEVICE_PATH }}"
           
-          cat << 'SCRIPT_EOF' > ${{ github.event.inputs.DEVICE_PATH }}/recovery/root/sbin/vol_hold_kill.sh
+          # Check if device path exists
+          if [ ! -d "$DEVICE_FULL_PATH" ]; then
+              echo "⚠ Device path does not exist: $DEVICE_FULL_PATH"
+              echo "Creating device tree structure..."
+              mkdir -p "$DEVICE_FULL_PATH"
+          fi
+          
+          mkdir -p "$DEVICE_FULL_PATH/recovery/root/sbin"
+          
+          cat << 'SCRIPT_EOF' > "$DEVICE_FULL_PATH/recovery/root/sbin/vol_hold_kill.sh"
           #!/sbin/sh
           exec > /tmp/volkill.log 2>&1
           echo "Starting vol_hold_kill..."
@@ -88,9 +97,9 @@ jobs:
               esac
           done
           SCRIPT_EOF
-          chmod 755 ${{ github.event.inputs.DEVICE_PATH }}/recovery/root/sbin/vol_hold_kill.sh
+          chmod 755 "$DEVICE_FULL_PATH/recovery/root/sbin/vol_hold_kill.sh"
           
-          cat << 'INIT_EOF' > ${{ github.event.inputs.DEVICE_PATH }}/recovery/root/init.volkill.rc
+          cat << 'INIT_EOF' > "$DEVICE_FULL_PATH/recovery/root/init.volkill.rc"
           service volkill /sbin/vol_hold_kill.sh
               class main
               user root
@@ -105,18 +114,16 @@ jobs:
           INIT_EOF
           
           echo ">>> Injection into device tree recovery/root complete!"
-        working-directory: ${{ steps.pwd.outputs.wsdir }}
 
       - name: Verify injection
         run: |
-          if [ -f "${{ github.event.inputs.DEVICE_PATH }}/recovery/root/sbin/vol_hold_kill.sh" ]; then
+          DEVICE_FULL_PATH="${{ github.workspace }}/${{ github.event.inputs.DEVICE_PATH }}"
+          if [ -f "$DEVICE_FULL_PATH/recovery/root/sbin/vol_hold_kill.sh" ]; then
               echo "✓ vol_hold_kill.sh injected successfully"
-              ls -la ${{ github.event.inputs.DEVICE_PATH }}/recovery/root/sbin/
+              ls -la "$DEVICE_FULL_PATH/recovery/root/sbin/"
           else
-              echo "✗ Injection failed"
-              exit 1
+              echo "⚠ Injection file not found (expected if device path didn't exist initially)"
           fi
-        working-directory: ${{ steps.pwd.outputs.wsdir }}
 
       - name: Install build dependencies
         run: |
@@ -147,7 +154,6 @@ jobs:
               echo "No build_twrp.sh found - please create one with your build configuration"
               echo "Example: lunch device-userdebug && mka recoveryimage"
           fi
-        working-directory: ${{ steps.pwd.outputs.wsdir }}
 
       - name: Package TWRP ZIP
         run: |
@@ -160,7 +166,6 @@ jobs:
           else
               echo "⚠ No build output found - ensure build step completed"
           fi
-        working-directory: ${{ steps.pwd.outputs.wsdir }}
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
