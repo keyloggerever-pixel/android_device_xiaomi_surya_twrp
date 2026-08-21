@@ -132,7 +132,7 @@ jobs:
             bc
 
       - name: Setup Java
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '8'
@@ -151,10 +151,10 @@ jobs:
 
       - name: Package TWRP ZIP
         run: |
+          mkdir -p build_output
           BUILD_OUTPUT=$(find . -name "*.img" -o -name "recovery.zip" 2>/dev/null | head -1)
           if [ -n "$BUILD_OUTPUT" ]; then
               echo "Found build output: $BUILD_OUTPUT"
-              mkdir -p build_output
               cp "$BUILD_OUTPUT" build_output/
               echo "✓ Build artifacts packaged successfully"
           else
@@ -163,12 +163,12 @@ jobs:
         working-directory: ${{ steps.pwd.outputs.wsdir }}
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: twrp-recovery-${{ github.sha }}
           path: build_output/
           retention-days: 30
-        if: success()
+        if: always()
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
