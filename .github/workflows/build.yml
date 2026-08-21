@@ -1,0 +1,118 @@
+name: TWRP Build with Volume Hold Kill
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      DEVICE_PATH:
+        description: 'Device path for recovery injection'
+        required: false
+        default: 'device/xiaomi/surya'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set working directory
+        id: pwd
+        run: echo "wsdir=${{ github.workspace }}" >> $GITHUB_OUTPUT
+
+      - name: Inject volume-hold kill script into TWRP ramdisk
+        run: |
+          mkdir -p ${{ github.event.inputs.DEVICE_PATH }}/recovery/root/sbin
+          
+          cat << 'SCRIPT_EOF' > ${{ github.event.inputs.DEVICE_PATH }}/recovery/root/sbin/vol_hold_kill.sh
+          #!/sbin/sh
+          exec > /tmp/volkill.log 2>&1
+          echo "Starting vol_hold_kill..."
+          KEY="KEY_VOLUMEDOWN"
+          HOLD_TIME=3
+          FLAG="/dev/.vol_hold_active"
+
+          DEV=""
+          for i in /dev/input/event*; do
+              if getevent -lp "$i" 2>/dev/null | grep -q "$KEY"; then
+                  DEV="$i"
+                  break
+              fi
+          done
+
+          if [ -z "$DEV" ]; then
+              KEY="KEY_VOLUMEUP"
+              for i in /dev/input/event*; do
+                  if getevent -lp "$i" 2>/dev/null | grep -q "$KEY"; then
+                      DEV="$i"
+                      break
+                  fi
+              done
+          fi
+
+          if [ -z "$DEV" ]; then
+              echo "Failed to find volume key device."
+              exit 1
+          fi
+
+          echo "Found device: $DEV for $KEY"
+
+          (
+              while true; do
+                  sleep 1
+                  if [ -f "$FLAG" ]; then
+                      start=$(cat "$FLAG" 2>/dev/null || echo 0)
+                      now=$(cut -d. -f1 /proc/uptime)
+                      held=$((now - start))
+                      if [ "$held" -ge "$HOLD_TIME" ]; then
+                          echo "Hold detected! Killing recovery..."
+                          rm -f "$FLAG"
+                          killall recovery
+                          exit 0
+                      fi
+                  fi
+              done
+          ) &
+
+          getevent -l "$DEV" | while read -r line; do
+              case "$line" in
+                  *"$KEY"*DOWN*) cut -d. -f1 /proc/uptime > "$FLAG" ;;
+                  *"$KEY"*UP*) rm -f "$FLAG" ;;
+              esac
+          done
+          SCRIPT_EOF
+          chmod 755 ${{ github.event.inputs.DEVICE_PATH }}/recovery/root/sbin/vol_hold_kill.sh
+          
+          cat << 'INIT_EOF' > ${{ github.event.inputs.DEVICE_PATH }}/recovery/root/init.volkill.rc
+          service volkill /sbin/vol_hold_kill.sh
+              class main
+              user root
+              group root input
+              oneshot
+
+          on post-fs-data
+              start volkill
+
+          on boot
+              start volkill
+          INIT_EOF
+          
+          echo ">>> Injection into device tree recovery/root complete!"
+        working-directory: ${{ steps.pwd.outputs.wsdir }}
+
+      - name: Verify injection
+        run: |
+          if [ -f "${{ github.event.inputs.DEVICE_PATH }}/recovery/root/sbin/vol_hold_kill.sh" ]; then
+              echo "✓ vol_hold_kill.sh injected successfully"
+              ls -la ${{ github.event.inputs.DEVICE_PATH }}/recovery/root/sbin/
+          else
+              echo "✗ Injection failed"
+              exit 1
+          fi
+        working-directory: ${{ steps.pwd.outputs.wsdir }}
